@@ -4,6 +4,10 @@ Windows 多显示器分屏关闭工具：可以只关其中 1 台、2 台，或�
 
 典型用法：电脑接一个 HDMI/DP 诱骗器（虚拟屏），开启「远程模式」后断开所有实体屏，只留虚拟屏，电脑看起来是关着的，远程却能正常操作。
 
+## 下载
+
+直接到 [Releases](https://github.com/y1991427360s/monitor-off/releases/latest) 下载单文件 exe：`MonitorOff-*-win-x64.exe` 需要 .NET 8 桌面运行时；`*-standalone.exe` 自带运行时，下载即用。
+
 ## 构建与安装
 
 需要 Windows 10/11、[.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)（运行只需 .NET 8 桌面运行时）。
