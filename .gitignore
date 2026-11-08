@@ -1,0 +1,6 @@
+bin/
+obj/
+*.user
+.vs/
+# 快捷方式含本机绝对路径，由 install.ps1 生成
+*.lnk
