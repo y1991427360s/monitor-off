@@ -17,7 +17,10 @@ git clone https://github.com/y1991427360s/monitor-off.git
 cd monitor-off
 powershell -ExecutionPolicy Bypass -File .\install.ps1            # 构建到 bin\ 并在项目目录创建快捷方式
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Desktop   # 同时把快捷方式放到桌面
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Startup   # 同时加入开机启动（在托盘待命）
 ```
+
+程序正在运行时重新执行 `install.ps1`：如果有屏关着会先恢复再结束旧进程，构建完自动重新启动到托盘。断开输出的状态会被 Windows 记住，重启电脑后实体屏仍是断开的，所以经常用远程模式的话建议加 `-Startup`，保证开机后 Ctrl+Alt+F12 可用。
 
 ## 使用
 
@@ -28,6 +31,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Desktop   # 同时把快
 | `恢复全部显示器.lnk` | 把所有关掉的显示器打开 |
 
 - **Ctrl+Alt+F12**：随时恢复全部显示器（程序在后台或托盘里时都有效）。
+- **Ctrl+Alt+F11**：只断开虚拟屏（本机为 3 号 TCT），1、2 号实体屏保持亮着；虚拟屏上的窗口会被 Windows 挪回实体屏。实体屏全都关着时不会执行。托盘菜单「只关虚拟屏」和命令行 `--virtual-off` 效果相同；按 Ctrl+Alt+F12 可以把虚拟屏接回来。
 - 点窗口的 × 或 – 只会把程序收到托盘，不会恢复显示器；「保持关闭」和热键继续生效。真正退出请用托盘菜单里的「恢复全部并退出」。
 - **保持关闭**（默认开启）：每 20 秒给已关闭的屏补发一次关闭命令。显示器因为 Windows 自动熄屏后又唤醒、信号恢复等原因自己亮起来时，最多 20 秒后又会关掉。
 - **碰本机键盘鼠标时自动恢复**（默认关闭）：只响应本机的物理键鼠，`SendInput` 注入的操作会被忽略（已实测）。ToDesk 如果走的是驱动级输入，可能会被当作本机操作，所以远程使用时建议保持关闭。
@@ -57,6 +61,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Desktop   # 同时把快
 - **断开主屏后剩下的屏会挪到 (0,0)**：直接按当前坐标画布局图，它会和被断开那台记录的位置重叠，编号也会乱。现在没有断开任何屏时，会把布局记成“原始布局”（`settings.json` 里的 `Home`）；断开期间布局图和 1/2/3 编号一律按原始布局显示。
 - **SKG H27T22S-3 Pro 用 DDC 待机后会自己亮**：显卡还在送信号，显示器过一阵就会自己醒过来。所以默认改用断开输出。
 - **旧版断开（`ChangeDisplaySettingsEx` 宽高写 0）配合「扩展」接回不可靠**：断开时写进系统数据库的配置会被「扩展」原样套用，被断开的屏还是关着（实测 3 号接回失败）。
+- **DDC 探测偶尔会失败**：显示器休眠或总线忙时读 VCP 会失败，如果把这次结果永久记成“不支持”，实体屏就会被当成虚拟屏，远程模式不关它。现在探测重试 3 次，缓存里“不支持”的结果每次启动重新确认一次。
 - **WPF 透明分层窗口（AllowsTransparency）慢**：创建慢而且只能软件渲染，点击发钝。现在改用普通窗口，圆角和阴影交给 Win11 DWM 绘制。
 
 ## 文件
@@ -68,6 +73,6 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Desktop   # 同时把快
 - `bin\分屏关闭显示器.exe`：构建产物（依赖 .NET 8 桌面运行时）
 - `install.ps1`：构建并创建快捷方式，加 `-Desktop` 同时放到桌面
 
-命令行参数（程序已在运行时，会转交给正在运行的那个实例）：`--off 1,2`、`--on 1`、`--remote`、`--restore`。
+命令行参数（程序已在运行时，会转交给正在运行的那个实例）：`--off 1,2`、`--on 1`、`--remote`、`--virtual-off`、`--restore`。
 
 需要排查启动耗时：设置环境变量 `MONITOROFF_TRACE=1`，各阶段耗时会写入 `%TEMP%\monitoroff-trace.log`。

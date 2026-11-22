@@ -62,13 +62,18 @@ public static class MonitorService
         return name;
     }
 
+    /// <summary>枚举显示器。整体持 OpLock（可重入），避免和后台操作同时读写设置里的字典。</summary>
     public static List<Mon> Enumerate()
     {
+        lock (OpLock) return EnumerateCore();
+    }
+
+    static List<Mon> EnumerateCore()
+    {
         var list = new List<Mon>();
-        if (GetDisplayConfigBufferSizes(QDC_ALL_PATHS, out uint np, out uint nm) != 0) return list;
-        var paths = new PATH_INFO[np];
-        var modes = new MODE_INFO[nm];
-        if (QueryDisplayConfig(QDC_ALL_PATHS, ref np, paths, ref nm, modes, IntPtr.Zero) != 0) return list;
+        var (paths, _) = Query(QDC_ALL_PATHS); // 带重试：拓扑刚变时缓冲区大小会对不上
+        int np = paths.Length;
+        if (np == 0) return list;
 
         var desk = DesktopMonitors();
         var settings = Store.Load();
@@ -140,7 +145,9 @@ public static class MonitorService
             if (!same) Store.Update(s => s.Home = snap);
         }
         var home = Store.Load().Home;
-        int extraX = home.Values.Select(v => v[0] + v[2]).DefaultIfEmpty(0).Max() + 80;
+        int extraX = home.Values.Select(v => v[0] + v[2])
+            .Concat(list.Where(m => m.Active).Select(m => m.X + m.W))
+            .DefaultIfEmpty(0).Max() + 80;   // 未记录位置的屏排在所有已知屏右侧，避免卡片重叠
         foreach (var m in list)
         {
             if (home.TryGetValue(m.Key, out var v)) { m.DX = v[0]; m.DY = v[1]; m.DW = v[2]; m.DH = v[3]; }
@@ -171,20 +178,56 @@ public static class MonitorService
         return ok;
     }
 
+    /// <summary>探测是否支持 DDC。显示器休眠或总线忙时会偶发失败，所以重试几次。</summary>
     public static bool ProbeDdc(Mon m)
-        => m.Active && WithPhysical(m.Gdi, p => GetVCPFeatureAndVCPFeatureReply(p, 0xD6, IntPtr.Zero, out _, out _));
+    {
+        if (!m.Active) return false;
+        for (int i = 0; i < 3; i++)
+        {
+            if (WithPhysical(m.Gdi, p => GetVCPFeatureAndVCPFeatureReply(p, 0xD6, IntPtr.Zero, out _, out _))) return true;
+            if (i < 2) Thread.Sleep(120);
+        }
+        return false;
+    }
 
-    /// <summary>探测还没缓存的显示器是否支持 DDC，结果写入缓存。返回是否有变化。</summary>
+    // 本次运行已经探测过的屏。缓存里“不支持”的结果每次启动重新确认一次，避免一次偶发失败被永久记住
+    static readonly HashSet<string> ProbedThisRun = new();
+
+    static bool NeedsProbe(Mon m)
+        => m.Active && (m.Ddc == null || (m.Ddc == false && !m.Virtual && !ProbedThisRun.Contains(m.Key)));
+
+    public static bool AnyNeedsProbe(List<Mon> mons)
+    {
+        lock (OpLock) return mons.Any(NeedsProbe);
+    }
+
+    /// <summary>清空 DDC 缓存，下次刷新时全部重新探测。</summary>
+    public static void ForgetDdc()
+    {
+        lock (OpLock)
+        {
+            ProbedThisRun.Clear();
+            Store.Update(s => s.DdcCache.Clear());
+        }
+    }
+
+    /// <summary>探测还没缓存（或缓存为“不支持”且本次运行还没确认过）的显示器，结果写入缓存。返回是否有变化。</summary>
     public static bool ProbeMissing(List<Mon> mons)
     {
         bool changed = false;
-        foreach (var m in mons.Where(m => m.Active && m.Ddc == null))
+        foreach (var m in mons)
         {
-            bool ok;
-            lock (OpLock) ok = ProbeDdc(m);
-            m.Ddc = ok; changed = true;
-            var key = m.Key;
-            Store.Update(s => s.DdcCache[key] = ok);
+            lock (OpLock)
+            {
+                if (!NeedsProbe(m)) continue;
+                bool ok = ProbeDdc(m);
+                ProbedThisRun.Add(m.Key);
+                if (m.Ddc == ok) continue;
+                m.Ddc = ok; changed = true;
+                if (ok) m.Physical = true;
+                var key = m.Key;
+                Store.Update(s => s.DdcCache[key] = ok);
+            }
         }
         return changed;
     }
@@ -258,6 +301,7 @@ public static class MonitorService
     /// <summary>断开指定显示器。主屏被断开时，把 preferPrimary（或剩下的第一台）挪到 (0,0) 当主屏。</summary>
     static int DetachKeys(HashSet<string> keys, string? preferPrimary)
     {
+        TargetKeyCache.Clear(); // 同一个接口可能已经换了显示器，每次操作重新查设备路径
         var (p, m) = Query(QDC_ONLY_ACTIVE_PATHS);
         var keep = p.Where(x => !keys.Contains(KeyOf(x.target))).ToArray();
         if (keep.Length == 0) return -1;
@@ -295,6 +339,7 @@ public static class MonitorService
     /// <summary>接回指定显示器：给它挑一个空闲的源，交给 Windows 选模式。</summary>
     static int AttachKeys(HashSet<string> keys)
     {
+        TargetKeyCache.Clear();
         var (ap, am) = Query(QDC_ONLY_ACTIVE_PATHS);
         var (all, _) = Query(QDC_ALL_PATHS);
         var paths = ap.ToList();
